@@ -5,6 +5,9 @@ import sys
 from .config import Settings
 from .engine.orchestrator import CouncilOrchestrator
 from .store.database import Database
+from .engine.evomem import EvoMemStore
+from pathlib import Path
+import shlex
 
 def _render_record(record, seats=(), audit=False):
     verdict = record.get("verdict") or {}
@@ -56,6 +59,8 @@ def _render_record(record, seats=(), audit=False):
 
 
 def _render_output(output, store, settings, audit=False):
+    if "evomem_status" in output: print("EvoMem: " + ", ".join(f"{k.lower()}: {v}" for k, v in output["evomem_status"].items()))
+    if "quarantine_cleared" in output: print(f"Revoked memories purged: {output['quarantine_cleared']}")
     if 'stale' in output:
         stale = output['stale']
         print(f"🔄  Stale decisions: {len(stale)}")
@@ -78,20 +83,33 @@ def main(argv=None):
     parser.add_argument("--early-exit", action="store_true", help="Allow grounded consensus to skip cross-examination")
     parser.add_argument("--audit", action="store_true", help="Show detailed evidence audit")
     parser.add_argument("--strict-audit", action="store_true", help="Reject evidence deficits")
+    parser.add_argument("--seal", action="store_true", help="Enable isolated candidate validation")
+    parser.add_argument("--seal-candidate", metavar="JSON", help="JSON file mapping workspace paths to replacement contents")
+    parser.add_argument("--seal-command", help="Baseline test command (argument string, no shell)")
+    parser.add_argument("--evomem", action="store_true", help="Enable continuous memory")
+    parser.add_argument("--evomem-status", action="store_true", help="Show memory state counts")
+    parser.add_argument("--quarantine-clear", action="store_true", help="Purge revoked memories")
+    parser.add_argument("--tenant-id", default="default")
     parser.add_argument("--history", action="store_true")
     parser.add_argument("--search", metavar="TERM")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--check-stale", action="store_true")
     args = parser.parse_args(argv)
-    if not (args.topic or args.history or args.search is not None or args.check_stale): parser.error("provide a topic, --history, --search, or --check-stale")
+    if not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear): parser.error("provide a topic, --history, --search, or --check-stale")
     try:
         settings = Settings()
-        with Database(settings.db_path) as store:
+        if bool(args.seal_candidate) != bool(args.seal_command) or (args.seal_candidate and not args.seal): raise ValueError("--seal-candidate and --seal-command require --seal and each other")
+        memory_path = str(Path(settings.db_path).with_suffix(".evomem.sqlite"))
+        with EvoMemStore(memory_path) as memory, Database(settings.db_path) as store:
             output = {}
             if args.check_stale: output['stale'] = store.check_stale()
             if args.history: output['history'] = store.history()
             if args.search is not None: output['search'] = store.search(args.search)
-            if args.topic: output['verdict'] = CouncilOrchestrator(settings, store=store).deliberate(args.topic, args.file, args.deep, early_exit=args.early_exit, strict_audit=args.strict_audit).to_dict()
+            if args.evomem_status: output['evomem_status'] = memory.snapshot()
+            if args.quarantine_clear: output['quarantine_cleared'] = memory.purge_revoked()
+            if args.topic:
+                candidate = json.loads(Path(args.seal_candidate).read_text()) if args.seal_candidate else None
+                output['verdict'] = CouncilOrchestrator(settings, store=store, enable_seal=args.seal, enable_evomem=args.evomem, memory_provider=memory, tenant_id=args.tenant_id).deliberate(args.topic, args.file, args.deep, early_exit=args.early_exit, strict_audit=args.strict_audit, code_candidate=candidate, seal_command=shlex.split(args.seal_command) if args.seal_command else None).to_dict()
             if args.json: print(json.dumps(output, ensure_ascii=False, indent=2))
             else:
                 _render_output(output, store, settings, audit=args.audit)
