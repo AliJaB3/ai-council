@@ -6,7 +6,7 @@ from .config import Settings
 from .engine.orchestrator import CouncilOrchestrator
 from .store.database import Database
 
-def _render_record(record, seats=()):
+def _render_record(record, seats=(), audit=False):
     verdict = record.get("verdict") or {}
     def number(value):
         try:
@@ -16,6 +16,15 @@ def _render_record(record, seats=()):
     print(f"\n⚖️  {verdict.get('topic', 'Council verdict')}")
     print(f"   {verdict.get('status', 'UNKNOWN')} · Confidence {number(verdict.get('confidence_score')):g}/10 · {number(verdict.get('duration_s')):.2f}s")
     print(f"   Decision: {verdict.get('id', '')} · Arbiter: {verdict.get('judge_model') or '—'}")
+    report = verdict.get('audit_report') or {}
+    if report:
+        print(f"   🎯 DRIFT Evidence Score: {number(report.get('support_ratio')):.0%} [{report.get('status', 'UNKNOWN')}]")
+        consensus = report.get('consensus') or {}
+        print(f"   Armor Consensus: {'SYCOPHANCY RISK' if consensus.get('sycophancy_risk') else 'GROUNDED' if consensus.get('can_early_exit') else 'DELIBERATE'} · entropy {number(consensus.get('consensus_entropy')):.2f}")
+        if audit:
+            print(f"   Claims: {report.get('supported_claims', 0)}/{report.get('total_claims', 0)} supported")
+            for detail in report.get('unsupported_details', []):
+                print(f"   • {detail.get('role', '')}: {detail.get('text', '')} — {detail.get('reason', '')}")
     opinions = record.get("opinions") or []
     if opinions or seats:
         print("\n👥  Council seats")
@@ -46,7 +55,7 @@ def _render_record(record, seats=()):
             print(f"\n## {title}\n\n{verdict[key]}")
 
 
-def _render_output(output, store, settings):
+def _render_output(output, store, settings, audit=False):
     if 'stale' in output:
         stale = output['stale']
         print(f"🔄  Stale decisions: {len(stale)}")
@@ -56,16 +65,19 @@ def _render_output(output, store, settings):
         if key in output:
             print(f"\n📚  {title} · {len(output[key])} decision(s)")
             for record in output[key]:
-                _render_record(record)
+                _render_record(record, audit=audit)
     if 'verdict' in output:
         verdict = output['verdict']
-        _render_record(store.get(verdict['id']) or {'verdict': verdict}, settings.seats)
+        _render_record(store.get(verdict['id']) or {'verdict': verdict}, settings.seats, audit=audit)
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ai-council", description="Convene the AI Council")
     parser.add_argument("topic", nargs="?")
     parser.add_argument("--file", action="append", default=[], help="Ground deliberation in a file; repeatable")
     parser.add_argument("--deep", action="store_true", help="Run dialectical cross-examination")
+    parser.add_argument("--early-exit", action="store_true", help="Allow grounded consensus to skip cross-examination")
+    parser.add_argument("--audit", action="store_true", help="Show detailed evidence audit")
+    parser.add_argument("--strict-audit", action="store_true", help="Reject evidence deficits")
     parser.add_argument("--history", action="store_true")
     parser.add_argument("--search", metavar="TERM")
     parser.add_argument("--json", action="store_true")
@@ -79,10 +91,10 @@ def main(argv=None):
             if args.check_stale: output['stale'] = store.check_stale()
             if args.history: output['history'] = store.history()
             if args.search is not None: output['search'] = store.search(args.search)
-            if args.topic: output['verdict'] = CouncilOrchestrator(settings, store=store).deliberate(args.topic, args.file, args.deep).to_dict()
+            if args.topic: output['verdict'] = CouncilOrchestrator(settings, store=store).deliberate(args.topic, args.file, args.deep, early_exit=args.early_exit, strict_audit=args.strict_audit).to_dict()
             if args.json: print(json.dumps(output, ensure_ascii=False, indent=2))
             else:
-                _render_output(output, store, settings)
+                _render_output(output, store, settings, audit=args.audit)
         return 0
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"ai-council: {exc}", file=sys.stderr)

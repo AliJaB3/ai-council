@@ -73,5 +73,7 @@ class CouncilVerdict:
     judge_model: str = ""
     duration_s: float = 0.0
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    audit_report: dict = field(default_factory=dict)
+    early_exit: bool = False
     def to_dict(self):
         return asdict(self)
