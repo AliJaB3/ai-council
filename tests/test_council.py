@@ -94,6 +94,29 @@ def test_seat_errors():
     client.close()
 
 
+def test_seat_urllib_fallback(monkeypatch):
+    from io import BytesIO
+    from urllib.error import URLError
+    from ai_council.seats import base
+
+    calls = []
+    def open_request(request, timeout):
+        calls.append(json.loads(request.data))
+        assert request.full_url == 'http://example.test/v1/chat/completions'
+        assert request.get_header('Authorization') == 'Bearer secret'
+        assert request.get_header('Content-type') == 'application/json'
+        assert timeout == SEATS[2].timeout
+        if len(calls) == 1:
+            raise URLError('offline')
+        return BytesIO(json.dumps({'choices': [{'message': {'content': '{"stance": "SUPPORT"}'}}]}).encode())
+
+    monkeypatch.setattr(base, 'httpx', None)
+    monkeypatch.setattr(base, 'urlopen', open_request)
+    opinion = BaseSeat(SEATS[2], Settings(base_url='http://example.test/v1/', api_key='secret')).evaluate('topic')
+    assert [call['model'] for call in calls] == [SEATS[2].model, *SEATS[2].fallbacks]
+    assert opinion.model_used == SEATS[2].fallbacks[0]
+
+
 class FakeSeat:
     def __init__(self, role, fail=False): self.role, self.fail = role, fail
     def evaluate(self, topic, grounding):
@@ -148,3 +171,18 @@ def test_cli_renders_record(tmp_path, monkeypatch, capsys):
     assert 'Architect' in output and 'SUPPORT' in output and '125 ms' in output
     assert 'Dialectic turns' in output and 'Check cost' in output
     assert '## Executive verdict' in output and 'Ship it' in output and '## Risk matrix' in output
+
+
+def test_cli_renders_legacy_record(capsys):
+    from ai_council.cli import _render_record
+
+    _render_record({'verdict': {'confidence_score': None, 'duration_s': '2.5'},
+                    'opinions': [{}],
+                    'turns': [{'seat_role': 'primary', 'role': 'ignored'},
+                              {'role': 'legacy'}, {'title': 'Advisor'}, {},
+                              {'seat_role': '', 'role': 'fallback'}]})
+    output = capsys.readouterr().out
+    for name in ('primary', 'legacy', 'Advisor', 'Specialist', 'fallback'):
+        assert name in output
+    assert 'Confidence 0/10 · 2.50s' in output
+    _render_record({})

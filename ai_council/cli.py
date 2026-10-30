@@ -7,18 +7,23 @@ from .engine.orchestrator import CouncilOrchestrator
 from .store.database import Database
 
 def _render_record(record, seats=()):
-    verdict = record["verdict"]
+    verdict = record.get("verdict") or {}
+    def number(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
     print(f"\n⚖️  {verdict.get('topic', 'Council verdict')}")
-    print(f"   {verdict.get('status', 'UNKNOWN')} · Confidence {verdict.get('confidence_score', 0):g}/10 · {verdict.get('duration_s', 0):.2f}s")
+    print(f"   {verdict.get('status', 'UNKNOWN')} · Confidence {number(verdict.get('confidence_score')):g}/10 · {number(verdict.get('duration_s')):.2f}s")
     print(f"   Decision: {verdict.get('id', '')} · Arbiter: {verdict.get('judge_model') or '—'}")
-    opinions = record.get("opinions", [])
+    opinions = record.get("opinions") or []
     if opinions or seats:
         print("\n👥  Council seats")
-        by_role = {opinion['role']: opinion for opinion in opinions}
+        by_role = {opinion.get('role'): opinion for opinion in opinions if opinion.get('role')}
         for opinion in opinions:
             stance = opinion.get('stance', 'UNKNOWN')
             icon = {'SUPPORT': '✅', 'OPPOSE': '❌', 'AMEND': '🔧'}.get(stance, '•')
-            print(f"  {opinion.get('avatar') or '👤'}  {opinion.get('title') or opinion['role']}  {icon} {stance} · {opinion.get('confidence', 0)}/10 · {opinion.get('latency_ms', 0):.0f} ms")
+            print(f"  {opinion.get('avatar') or '👤'}  {opinion.get('title') or opinion.get('role') or 'Specialist'}  {icon} {stance} · {opinion.get('confidence', 0)}/10 · {number(opinion.get('latency_ms')):.0f} ms")
             if opinion.get('model_used'):
                 print(f"      {opinion['model_used']}")
             if opinion.get('argument'):
@@ -26,14 +31,14 @@ def _render_record(record, seats=()):
         for seat in seats:
             if seat.role not in by_role:
                 print(f"  {seat.avatar}  {seat.title}  ⚠️ No opinion returned")
-    turns = record.get('turns', [])
+    turns = record.get('turns') or []
     if turns:
         print("\n💬  Dialectic turns")
         for turn in turns:
-            print(f"  • {turn['seat_role']} · {turn.get('evolved_stance', 'UNKNOWN')}")
+            print(f"  • {turn.get('seat_role') or turn.get('role') or turn.get('title') or 'Specialist'} · {turn.get('evolved_stance', 'UNKNOWN')}")
             for label, target, point in (('Challenge', turn.get('challenge_target'), turn.get('challenge_point')), ('Synergy', turn.get('synergy_target'), turn.get('synergy_point'))):
                 if point:
-                    print(f"    {label}{' → ' + target if target else ''}: {point}")
+                    print(f"    {label}{f' → {target}' if target else ''}: {point}")
             if turn.get('text'):
                 print(f"    {turn['text']}")
     for key, title in (("executive_verdict", "Executive verdict"), ("emergent_architecture", "Emergent architecture"), ("consensus_analysis", "Consensus analysis"), ("implementation_blueprint", "Implementation blueprint"), ("risk_matrix", "Risk matrix"), ("kill_switch_criteria", "Kill switch criteria")):

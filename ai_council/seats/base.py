@@ -3,7 +3,13 @@ from dataclasses import asdict
 import json
 import re
 import time
-import httpx
+from urllib.error import URLError
+from urllib.request import Request, urlopen
+
+try:
+    import httpx
+except ImportError:
+    httpx = None
 from ..config import Settings, SeatConfig
 from ..models import SeatOpinion, DialecticTurn
 
@@ -46,12 +52,23 @@ class BaseSeat:
                     timeout=self.config.timeout)
                 if self.client is not None:
                     response = self.client.post(self.settings.base_url.rstrip("/") + "/chat/completions", **kwargs)
-                else:
+                elif httpx is not None:
                     response = httpx.post(self.settings.base_url.rstrip("/") + "/chat/completions", **kwargs)
-                response.raise_for_status()
-                data = _json_object(response.json()["choices"][0]["message"]["content"])
+                else:
+                    request = Request(
+                        self.settings.base_url.rstrip("/") + "/chat/completions",
+                        data=json.dumps(kwargs["json"]).encode("utf-8"),
+                        headers={"Content-Type": "application/json", **kwargs["headers"]},
+                        method="POST",
+                    )
+                    with urlopen(request, timeout=kwargs["timeout"]) as response:
+                        result = json.load(response)
+                if self.client is not None or httpx is not None:
+                    response.raise_for_status()
+                    result = response.json()
+                data = _json_object(result["choices"][0]["message"]["content"])
                 return data, model, (time.monotonic() - start) * 1000
-            except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+            except ((httpx.HTTPError,) if httpx is not None else ()) + (URLError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
                 errors.append(f"{model}: {exc}")
         raise SeatError(f"{self.config.role} failed: {'; '.join(errors)}")
 
