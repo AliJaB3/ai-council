@@ -10,7 +10,8 @@ from pathlib import Path
 import shlex
 from .skills import builtin_registry
 from .skills.models import Domain
-from .workshop import IdeationWorkshop
+from .workshop import AutonomousCrucibleWorkshop
+from .workshop.models import Domain as WorkshopDomain, IdeaStatus
 from dataclasses import asdict
 
 def _render_record(record, seats=(), audit=False):
@@ -108,13 +109,15 @@ def main(argv=None):
     parser.add_argument("--check-stale", action="store_true")
     parser.add_argument("--workshop", action="store_true", help="Run an ideation workshop on the topic")
     parser.add_argument("--workshop-count", type=int, default=3, help="Number of workshop candidates to generate (default: 3)")
+    parser.add_argument("--workshop-domain", type=str.upper, choices=[d.value for d in WorkshopDomain], help="Crucible target domain")
+    parser.add_argument("--crucible-strict", action="store_true", help="Return failure if any candidate remains rejected")
     args = parser.parse_args(argv)
     if args.workshop and not args.topic: parser.error("--workshop requires a topic")
     if not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear or args.list_skills): parser.error("provide a topic, --history, --search, or --check-stale")
     try:
         if args.workshop:
-            workshop = IdeationWorkshop(count=args.workshop_count)
-            workshop.run_cycle(args.topic, domain=None if args.skill_domain == 'auto' else Domain(args.skill_domain))
+            workshop = AutonomousCrucibleWorkshop(count=args.workshop_count, strict=args.crucible_strict)
+            survivors = workshop.run_cycle(args.topic, domain=WorkshopDomain(args.workshop_domain) if args.workshop_domain else None)
             if args.json:
                 print(json.dumps({'ideas': [asdict(idea) for idea in workshop.candidates]}, ensure_ascii=False, indent=2))
             else:
@@ -122,11 +125,15 @@ def main(argv=None):
                 for idea in workshop.candidates:
                     print(f"\n{'✅' if idea.status.value == 'VALIDATED' else '❌'} [{idea.status.value}] {idea.title}")
                     print(f"  Problem: {idea.problem_statement}")
-                    print(f"  Mechanism: {idea.causal_mechanism}")
+                    mechanism = idea.causal_mechanism
+                    contract = idea.invariant_contract
+                    print(f"  [AXIOMATIC: {'FAIL' if idea.status == IdeaStatus.TIER_0_REJECTED else 'PASS'}] [CONTRACT: {'NOT RUN' if idea.status == IdeaStatus.TIER_0_REJECTED else 'FAIL' if idea.status == IdeaStatus.TIER_1_REJECTED else 'PASS'}] [STATUS: {idea.status.value}]")
+                    print(f"  Mechanism: trigger={mechanism.trigger_event}; node={mechanism.causal_node}; intervention={mechanism.intervention}; outcome={mechanism.predicted_outcome}; metric={mechanism.falsification_metric}; threshold={mechanism.falsification_threshold}")
+                    print(f"  Contract: preconditions={contract.preconditions}; postconditions={contract.postconditions}; time={contract.complexity_time}; space={contract.complexity_space}; latency={contract.max_latency_budget_ns} ns; capital risk=${contract.max_capital_risk_usd:.2f}")
                     print(f"  Baseline: {idea.baseline_reference}")
                     print(f"  Cheapest falsification test: {idea.cheapest_falsification_test}")
                     if idea.falsification_reason: print(f"  Rejection reason: {idea.falsification_reason}")
-            return 0
+            return 1 if args.crucible_strict and len(survivors) < args.workshop_count else 0
         if args.list_skills and not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear):
             skills = builtin_registry().list_skills()
             if args.json:

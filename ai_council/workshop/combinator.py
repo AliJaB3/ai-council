@@ -29,3 +29,35 @@ class MorphologicalCombinator:
                 created_at=datetime.now(timezone.utc).isoformat(),
             ))
         return ideas
+
+
+class HyperPrecisionCombinator:
+    """Transpose a source domain's mechanisms onto target-domain problems."""
+    def __init__(self, registry=None):
+        from .registry import DimensionRegistry
+        self.registry = registry or DimensionRegistry()
+
+    def combine(self, domain, count=3):
+        from .models import Domain as WorkshopDomain, CausalMechanism, InvariantContract
+        domain = WorkshopDomain(domain)
+        if count < 0:
+            raise ValueError('count must be non-negative')
+        pack = self.registry.get(domain)
+        problems = pack['problems'] or ['unmeasured system performance']
+        sources = [(d, p) for d, p in self.registry.packs.items() if d != domain and p['mechanisms']]
+        if not sources:
+            raise ValueError('at least one source domain with mechanisms is required')
+        combinations = [(problem, d, mechanism, primitive) for problem in problems for d, p in sources for mechanism in p['mechanisms'] for primitive in (p['primitives'] or ['system behavior'])]
+        if count > len(combinations):
+            raise ValueError(f'count must be between 0 and {len(combinations)}')
+        ideas = []
+        for problem, source, mechanism, primitive in combinations[:count]:
+            ideas.append(IdeaCard(
+                id=str(uuid4()), title=f'{mechanism.title()} for {problem}', domain=domain,
+                secondary_domains=[source], problem_statement=f'Reduce {problem} in {domain.value}.',
+                causal_mechanism=CausalMechanism(problem, primitive, f'Adapt {mechanism} from {source.value}', f'Reduce {problem} relative to baseline', 'relative improvement', 0.0),
+                invariant_contract=InvariantContract(preconditions=['Use isolated replay with no capital at risk'], postconditions=['Compare against the baseline'], complexity_time='O(n)', complexity_space='O(n)'),
+                baseline_reference=f'Existing approach to {problem}.',
+                cheapest_falsification_test=f'Compare against baseline on a representative replay; reject if {problem} does not improve.',
+                created_at=datetime.now(timezone.utc).isoformat()))
+        return ideas
