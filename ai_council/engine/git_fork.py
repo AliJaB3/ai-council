@@ -25,7 +25,7 @@ class ExecutionReceipt:
 
 
 class CounterfactualForkManager:
-    def fork_and_test(self, repo_path, patch_dict, test_command, correlation_id, timeout_s=10.0):
+    def fork_and_test(self, repo_path, patch_dict, test_command, correlation_id, timeout_s=20.0):
         start = time.monotonic()
         branch = 'council/fork-' + uuid4().hex
         status, code, output = 'FAILED', -1, ''

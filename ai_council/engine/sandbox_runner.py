@@ -59,7 +59,7 @@ class ASTSecurityGate(ast.NodeVisitor):
 
 
 class IsolatedSandboxRunner:
-    def __init__(self, timeout: float = 5.0, memory_limit: int = 256 * 1024 * 1024):
+    def __init__(self, timeout: float = 15.0, memory_limit: int = 256 * 1024 * 1024):
         self.timeout = timeout
         self.memory_limit = memory_limit
 
