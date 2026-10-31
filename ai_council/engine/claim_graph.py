@@ -87,11 +87,15 @@ class ClaimGraph:
     def consensus_score(self):
         if not self.opinions:
             return 0.0
-        counts = Counter(o.stance.value for o in self.opinions)
-        return max(counts.values()) / len(self.opinions)
+        counts = Counter()
+        for opinion in self.opinions:
+            counts[opinion.stance.value] += getattr(opinion, "calibration_weight", 1.0)
+        total = sum(counts.values())
+        return max(counts.values()) / total if total else 0.0
 
     def to_dict(self):
         return {"correlation_id": self.correlation_id, "claims": [asdict(c) for c in self.claims],
                 "evidence": [asdict(e) for e in self.evidence], "objections": [asdict(o) for o in self.objections],
                 "contested_claims": self.get_contested_claims(), "contradictions": self.contradictions(),
-                "consensus_score": self.consensus_score()}
+                "consensus_score": self.consensus_score(),
+                "seat_weights": {o.role: getattr(o, "calibration_weight", 1.0) for o in self.opinions}}

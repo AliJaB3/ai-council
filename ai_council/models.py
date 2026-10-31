@@ -42,6 +42,7 @@ class SeatOpinion:
     condition: str = ""
     claims: list[Claim] = field(default_factory=list)
     correlation_id: str = ""
+    calibration_weight: float = 1.0
     def __post_init__(self):
         self.stance = Stance(self.stance.upper())
         self.confidence = _confidence(self.confidence)
@@ -78,5 +79,6 @@ class CouncilVerdict:
     early_exit: bool = False
     correlation_id: str = field(default_factory=lambda: str(uuid4()))
     experiment_spec: dict | None = None
+    seat_weights: dict[str, float] = field(default_factory=dict)
     def to_dict(self):
         return asdict(self)

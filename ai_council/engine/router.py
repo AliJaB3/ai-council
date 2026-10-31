@@ -21,5 +21,5 @@ class DeliberationRouter:
 
 
 class VoIEngine:
-    def should_stop(self, turn_entropies: list[float], threshold: float = 0.05) -> bool:
-        return len(turn_entropies) >= 2 and abs(turn_entropies[-1] - turn_entropies[-2]) < threshold
+    def should_stop(self, turn_entropies: list[float], threshold: float = 0.05, unresolved_objections: int = 0) -> bool:
+        return unresolved_objections <= 0 and len(turn_entropies) >= 2 and abs(turn_entropies[-1] - turn_entropies[-2]) < threshold

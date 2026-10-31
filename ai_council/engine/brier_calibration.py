@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import math
 import sqlite3
 import threading
+from pathlib import Path
 
 
 @dataclass
@@ -16,6 +17,9 @@ class BrierRecord:
 
 class BrierEngine:
     def __init__(self, path=':memory:'):
+        if str(path) != ':memory:':
+            path = Path(path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
         self._lock = threading.RLock()
         self.connection.execute('CREATE TABLE IF NOT EXISTS brier_forecasts (seat TEXT NOT NULL, claim_id TEXT NOT NULL, predicted_prob REAL NOT NULL, outcome INTEGER, correlation_id TEXT NOT NULL)')

@@ -50,7 +50,7 @@ class CouncilOrchestrator:
                 try: results[i] = future.result()
                 except Exception as exc: errors.append(f"{getattr(getattr(seat, 'config', None), 'role', i)}: {exc}")
         return [results[i] for i in sorted(results)], errors
-    def deliberate(self, topic, files=None, deep=False, early_exit=False, strict_audit=False, code_candidate=None, seal_command=None, skill_domain=None, preflight=False, fast_path=False):
+    def deliberate(self, topic, files=None, deep=False, early_exit=False, strict_audit=False, code_candidate=None, seal_command=None, skill_domain=None, preflight=False, fast_path=False, dissent_guard=False):
         if not topic or not topic.strip(): raise ValueError("topic is required")
         correlation_id = str(uuid4())
         domain = self.skill_registry.detect_domain(topic) if skill_domain is None or skill_domain == 'auto' else Domain(skill_domain)
@@ -93,8 +93,22 @@ class CouncilOrchestrator:
         active_seats = seats[:1] if selected_route == RouteType.FAST_PATH else seats
         opinions, errors = InfoDelphi().evaluate(active_seats, topic, prompt_grounding)
         if not opinions: raise SeatError("All seats failed: " + "; ".join(errors))
+        brier = self.brier_engine or BrierEngine(self.store.path if self.store is not None and hasattr(self.store, "path") else self.settings.db_path)
+        try:
+            roles = [getattr(getattr(seat, "config", None), "role", getattr(seat, "role", None)) for seat in active_seats]
+            seat_weights = {role: brier.get_seat_weight(role) for role in roles if role}
+        finally:
+            if self.brier_engine is None: brier.close()
+        missing_roles = {opinion.role for opinion in opinions} - seat_weights.keys()
+        if missing_roles:
+            brier = self.brier_engine or BrierEngine(self.store.path if self.store is not None and hasattr(self.store, "path") else self.settings.db_path)
+            try:
+                seat_weights.update({role: brier.get_seat_weight(role) for role in missing_roles})
+            finally:
+                if self.brier_engine is None: brier.close()
         for opinion in opinions:
             opinion.correlation_id = correlation_id
+            opinion.calibration_weight = seat_weights.get(opinion.role, 1.0)
         commitments = []
         commit_manager = CommitRevealManager()
         for opinion in opinions:
@@ -128,12 +142,19 @@ class CouncilOrchestrator:
         for turn in turns:
             claim_graph.link_dialectical_turn(turn, opinions)
         graph = claim_graph.to_dict()
+        unresolved = sum(o.status.upper() == 'UNRESOLVED' for o in claim_graph.objections)
+        if unresolved:
+            route['early_exit'] = False
+        route['dissent_guard'] = True
+        route['unresolved_objections'] = unresolved
+        graph['seat_weights'] = seat_weights
         experiment = ExperimentSpecGenerator().generate(topic, graph['contested_claims'], correlation_id)
         if experiment:
             template_result = TemplateSandbox().run(experiment.test_code_template)
             if template_result.returncode:
                 raise ValueError("experiment template validation failed: " + template_result.stderr)
         verdict = arbiter.synthesize(topic, opinions, turns, graph, prompt_grounding)
+        verdict.seat_weights = seat_weights
         verdict.correlation_id = correlation_id
         verdict.experiment_spec = asdict(experiment) if experiment else None
         verdict.duration_s = time.monotonic() - start
