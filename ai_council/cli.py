@@ -4,6 +4,7 @@ import json
 import sys
 from .config import Settings
 from .engine.orchestrator import CouncilOrchestrator
+from .engine.streaming import DeliberationEventStream
 from .engine.brier_calibration import BrierEngine
 from .store.database import Database
 from .engine.evomem import EvoMemStore, QuarantineManager
@@ -38,6 +39,8 @@ def _render_record(record, seats=(), audit=False, emit_experiment=False):
         print(f"\n╭─ Experiment ─\n│ Hypothesis: {experiment['hypothesis']}\n│ Test template:\n{experiment['test_code_template']}\n╰─")
     report = verdict.get('audit_report') or {}
     if report:
+        for claim_id, market in report.get('lmsr_shadow', {}).items():
+            print(f"   📈 Shadow market {claim_id}: YES {market['probability_yes']:.1%} · NO {market['probability_no']:.1%}")
         for skill in report.get('active_skills', []):
             print(f"   🎯 Active Domain Skill: {skill['name']} (v{skill['version']} · {skill['blast_radius']})")
         print(f"   🎯 DRIFT Evidence Score: {number(report.get('support_ratio')):.0%} [{report.get('status', 'UNKNOWN')}]")
@@ -109,6 +112,9 @@ def main(argv=None):
     parser.add_argument("--file", action="append", default=[], help="Ground deliberation in a file; repeatable")
     parser.add_argument("--skill-domain", choices=["auto", "engineering", "finance", "security", "architecture", "research"], default="auto")
     parser.add_argument("--list-skills", action="store_true", help="List registered skills")
+    parser.add_argument("--stream-events", action="store_true", help="Stream JSON events to stdout")
+    parser.add_argument("--git-fork", metavar="REPO_PATH", help="Test candidate in a temporary git worktree")
+    parser.add_argument("--lmsr-shadow", action="store_true", help="Show shadow market probabilities")
     parser.add_argument("--preflight", action="store_true", help="Enforce candidate pre-flight checks")
     parser.add_argument("--fast-path", action="store_true", help="Force a single-pass deliberation")
     parser.add_argument("--brier-status", action="store_true", help="Show seat calibration scores")
@@ -166,7 +172,7 @@ def main(argv=None):
                 for s in skills: print(f"{s.name}  {s.domain.value}  {s.version}  {s.blast_radius.value}")
             return 0
         settings = Settings()
-        if bool(args.seal_candidate) != bool(args.seal_command) or (args.seal_candidate and not args.seal): raise ValueError("--seal-candidate and --seal-command require --seal and each other")
+        if bool(args.seal_candidate) != bool(args.seal_command) or (args.seal_candidate and not (args.seal or args.git_fork)): raise ValueError("--seal-candidate and --seal-command require each other and --seal or --git-fork")
         memory_path = str(Path(settings.db_path).with_suffix(".evomem.sqlite"))
         with EvoMemStore(memory_path) as memory, Database(settings.db_path) as store:
             output = {}
@@ -189,7 +195,9 @@ def main(argv=None):
             if args.quarantine_clear: output['quarantine_cleared'] = memory.purge_revoked()
             if args.topic:
                 candidate = json.loads(Path(args.seal_candidate).read_text()) if args.seal_candidate else None
-                output['verdict'] = CouncilOrchestrator(settings, store=store, enable_seal=args.seal, enable_evomem=args.evomem, memory_provider=memory, tenant_id=args.tenant_id).deliberate(args.topic, args.file, args.deep, early_exit=args.early_exit, strict_audit=args.strict_audit, code_candidate=candidate, seal_command=shlex.split(args.seal_command) if args.seal_command else None, skill_domain=args.skill_domain, preflight=args.preflight, fast_path=args.fast_path, dissent_guard=args.dissent_guard).to_dict()
+                stream = DeliberationEventStream()
+                if args.stream_events: stream.subscribe(lambda event: print(json.dumps(asdict(event), ensure_ascii=False), flush=True))
+                output['verdict'] = CouncilOrchestrator(settings, store=store, enable_seal=args.seal, enable_evomem=args.evomem, memory_provider=memory, tenant_id=args.tenant_id, event_stream=stream).deliberate(args.topic, args.file, args.deep, early_exit=args.early_exit, strict_audit=args.strict_audit, code_candidate=candidate, seal_command=shlex.split(args.seal_command) if args.seal_command else None, skill_domain=args.skill_domain, preflight=args.preflight, fast_path=args.fast_path, dissent_guard=args.dissent_guard, git_fork=args.git_fork, lmsr_shadow=args.lmsr_shadow).to_dict()
             if args.json: print(json.dumps(output, ensure_ascii=False, indent=2))
             else:
                 _render_output(output, store, settings, audit=args.audit, emit_experiment=args.emit_experiment)
