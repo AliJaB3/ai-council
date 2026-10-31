@@ -22,9 +22,9 @@ class SkillRegistry:
     def detect_domain(text: str) -> Domain:
         keywords = {
             Domain.SECURITY: ('injection', 'vuln', 'vulnerability', 'secret', 'sandbox', 'exploit', 'security'),
-            Domain.FINANCE: ('trading', 'trade', 'orderbook', 'funding', 'finance', 'financial', 'portfolio', 'slippage', 'leverage'),
+            Domain.FINANCE: ('trading', 'trade', 'orderbook', 'funding', 'finance', 'financial', 'portfolio', 'slippage', 'leverage', 'cvar', 'drawdown', 'liquidity', 'volatility'),
             Domain.ENGINEERING: ('code', 'ast', 'refactor', 'deadlock', 'software', 'debug', 'engineering', 'bug'),
-            Domain.ARCHITECTURE: ('architecture', 'architectural', 'design', 'scalability', 'distributed'),
+            Domain.ARCHITECTURE: ('architecture', 'architectural', 'design', 'scalability', 'distributed', 'consensus', 'dialectic', 'modular', 'systemic'),
             Domain.RESEARCH: ('research', 'hypothesis', 'literature', 'study', 'experiment', 'paper'),
         }
         words = set(re.findall(r'[a-z0-9_]+', text.lower()))

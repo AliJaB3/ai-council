@@ -22,7 +22,7 @@ class PreFlightHarness:
             if re.search(pattern, candidate_code, re.IGNORECASE):
                 violations.append(label)
         if self.domain == Domain.FINANCE:
-            for label, pattern in [('Missing slippage check', r'\bslippage\b'), ('Missing fee check', r'\bfees?\b'), ('Missing drawdown limit', r'\b(?:max(?:imum)?_?drawdown|drawdown_?limit|drawdown)\b')]:
+            for label, pattern in [('Missing slippage check', r'\bslippage\b'), ('Missing fee check', r'\bfees?\b'), ('Missing drawdown limit', r'\b(?:max(?:imum)?_?drawdown|drawdown_?limit|drawdown)\b'), ('Missing CVaR check', r'\bcvar\b|\bcvar_\w+\b|\b\w+_cvar\b'), ('Missing drawdown velocity limit', r'\bdrawdown_?velocity\b|\bdrawdown_?velocity_\w+\b')]:
                 if not re.search(pattern, candidate_code, re.IGNORECASE):
                     violations.append(label)
             if re.search(r'\bleverage\s*=\s*\d+(?:\.\d+)?', candidate_code, re.IGNORECASE) and not re.search(r'\b(?:max_leverage|leverage_limit|limit_leverage)\b', candidate_code, re.IGNORECASE):

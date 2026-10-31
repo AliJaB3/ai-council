@@ -19,8 +19,21 @@ def test_detection_and_builtins():
     registry = builtin_registry()
     for query, domain in [('trading orderbook funding', Domain.FINANCE), ('refactor code deadlock', Domain.ENGINEERING), ('prompt injection secret', Domain.SECURITY), ('system architecture', Domain.ARCHITECTURE), ('research literature', Domain.RESEARCH), ('hello', Domain.GENERAL)]:
         assert registry.detect_domain(query) == domain
-    assert len(registry.list_skills()) == 3
+    assert {skill.name for skill in registry.list_skills()} == {
+        'SystemsEngineering', 'QuantFinance', 'AdversarialSecurity',
+        'ProbabilisticRisk', 'DialecticConsensus',
+    }
     assert registry.resolve_jit(Domain.FINANCE)[0].name == 'QuantFinance'
+    for keyword in ('architecture', 'consensus', 'dialectic', 'modular', 'systemic'):
+        assert registry.detect_domain(keyword) == Domain.ARCHITECTURE
+    for keyword in ('cvar', 'drawdown', 'liquidity', 'volatility'):
+        assert registry.detect_domain(keyword) == Domain.FINANCE
+    risk = registry.get('ProbabilisticRisk')
+    assert risk.domain == Domain.FINANCE and risk.blast_radius == BlastRadius.READ_ONLY
+    assert risk.negative_constraints == ['Do not execute trades without 99% CVaR check.', 'Do not ignore drawdown velocity limits.']
+    consensus = registry.get('DialecticConsensus')
+    assert consensus.domain == Domain.ARCHITECTURE and consensus.blast_radius == BlastRadius.READ_ONLY
+    assert consensus.negative_constraints == ['Do not approve consensus without cross-peer challenge.', 'Do not accept unsubstantiated assertions without evidence grounding.']
 
 
 def test_preflight():
@@ -31,7 +44,10 @@ def test_preflight():
     assert harness.verify_candidate('os.system("id")')['status'] == 'FAIL'
     assert harness.verify_candidate('x = 1', lambda: 0.1)['status'] == 'FAIL'
     finance = PreFlightHarness(Domain.FINANCE)
-    assert finance.verify_candidate('slippage = 0.01\nfee = 1\nmax_drawdown = 0.1')['status'] == 'PASS'
+    candidate = 'slippage = 0.01\nfee = 1\nmax_drawdown = 0.1\ncvar = 0.02\ndrawdown_velocity_limit = 0.01'
+    assert finance.verify_candidate(candidate)['status'] == 'PASS'
+    assert 'Missing CVaR check' in finance.verify_candidate(candidate.replace('cvar', 'risk'))['violations']
+    assert 'Missing drawdown velocity limit' in finance.verify_candidate(candidate.replace('drawdown_velocity', 'velocity'))['violations']
     assert finance.verify_candidate('leverage = 100')['status'] == 'FAIL'
 
 
