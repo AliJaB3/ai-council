@@ -1,4 +1,5 @@
 """In-process ordered deliberation events."""
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import RLock
@@ -16,8 +17,11 @@ class DeliberationEvent:
 
 
 class DeliberationEventStream:
-    def __init__(self):
-        self._history = []
+    def __init__(self, max_events: int = 1000):
+        if max_events < 1:
+            raise ValueError("max_events must be positive")
+        self._history = deque(maxlen=max_events)
+        self._sequence = 0
         self._listeners = []
         self._lock = RLock()
 
@@ -27,7 +31,8 @@ class DeliberationEventStream:
 
     def emit(self, event_type, correlation_id, payload):
         with self._lock:
-            event = DeliberationEvent(len(self._history) + 1, str(uuid4()), correlation_id,
+            self._sequence += 1
+            event = DeliberationEvent(self._sequence, str(uuid4()), correlation_id,
                                       datetime.now(timezone.utc).isoformat(), event_type, dict(payload))
             self._history.append(event)
             for listener in tuple(self._listeners):

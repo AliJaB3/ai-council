@@ -3,8 +3,23 @@
 This gate is defense in depth, not an operating-system security boundary.
 """
 import ast
+import os
+import math
+import resource
 import subprocess
 import sys
+
+
+def apply_resource_limits(max_memory_mb: int = 512, max_cpu_s: int = 5):
+    for kind, limit in (("RLIMIT_AS", max_memory_mb * 1024 * 1024), ("RLIMIT_CPU", max_cpu_s)):
+        if hasattr(resource, kind):
+            resource.setrlimit(getattr(resource, kind), (limit, limit))
+
+
+def sanitize_env() -> dict:
+    blocked = ("KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "PROXY")
+    return {key: value for key, value in os.environ.items()
+            if not any(part in key.upper() for part in blocked)}
 
 
 class ASTPolicyViolation(RuntimeError):
@@ -50,10 +65,9 @@ class IsolatedSandboxRunner:
 
     def run(self, code: str):
         ASTSecurityGate().validate(code)
-        # Set limits in the child interpreter; never hold a parent lock during execution.
-        bootstrap = ('import resource, sys\n'
-                     'limit = int(sys.argv[1])\n'
-                     'resource.setrlimit(resource.RLIMIT_AS, (limit, limit))\n'
-                     'exec(compile(sys.stdin.read(), "<sandbox>", "exec"))\n')
-        return subprocess.run([sys.executable, '-I', '-c', bootstrap, str(self.memory_limit)],
-                              input=code, text=True, capture_output=True, timeout=self.timeout, check=False)
+        return subprocess.run([sys.executable, '-I', '-c', code],
+                              text=True, capture_output=True, timeout=self.timeout, check=False,
+                              env=sanitize_env(),
+                              preexec_fn=lambda: apply_resource_limits(
+                                  max(1, self.memory_limit // (1024 * 1024)),
+                                  max(1, math.ceil(self.timeout))))

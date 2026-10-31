@@ -1,5 +1,8 @@
 """SQLite persistence, FTS search, and grounding invalidation."""
 import json
+import re
+import queue
+from concurrent.futures import Future
 import sqlite3
 import threading
 from functools import wraps
@@ -8,6 +11,61 @@ from pathlib import Path
 from ..config import Settings
 from ..engine.grounding import changed
 from ..models import CouncilVerdict
+
+def normalize_persian(text: str) -> str:
+    return re.sub(r"[\u064b-\u065f]", "", text.translate(str.maketrans({"ي": "ی", "ك": "ک", "\u200c": " "})))
+
+
+class SingleWriterQueue:
+    """Run submitted write transactions in order on a dedicated thread."""
+    def __init__(self):
+        self._queue = queue.Queue()
+        self._guard = threading.Lock()
+        self._closed = False
+        self._thread = threading.Thread(target=self._run, daemon=True, name="sqlite-writer")
+        self._thread.start()
+
+    def _run(self):
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            future, function, args, kwargs = item
+            if future.set_running_or_notify_cancel():
+                try:
+                    future.set_result(function(*args, **kwargs))
+                except BaseException as exc:
+                    future.set_exception(exc)
+
+    def submit(self, function, *args, **kwargs):
+        if threading.current_thread() is self._thread:
+            future = Future()
+            try:
+                future.set_result(function(*args, **kwargs))
+            except BaseException as exc:
+                future.set_exception(exc)
+            return future
+        with self._guard:
+            if self._closed:
+                raise RuntimeError("writer queue is closed")
+            future = Future()
+            self._queue.put((future, function, args, kwargs))
+            return future
+
+    def close(self):
+        with self._guard:
+            if not self._closed:
+                self._closed = True
+                self._queue.put(None)
+        if threading.current_thread() is not self._thread:
+            self._thread.join()
+
+
+def _write(method):
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        return self._writer.submit(method, self, *args, **kwargs).result()
+    return wrapper
 
 def _locked(method):
     @wraps(method)
@@ -26,8 +84,12 @@ class Database:
         self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA journal_mode=WAL")
+        self.connection.execute("PRAGMA synchronous=NORMAL")
+        self.connection.execute("PRAGMA busy_timeout=5000")
         self.connection.execute("PRAGMA foreign_keys=ON")
+        self._writer = SingleWriterQueue()
         self._migrate()
+    @_write
     @_locked
     def _migrate(self):
         # Namespaced tables avoid altering or destroying older council schemas.
@@ -40,6 +102,12 @@ class Database:
         self.connection.commit()
         self._import_council_decisions()
         self._import_legacy()
+        # Rebuild the index so records created before normalization remain searchable.
+        with self.connection:
+            self.connection.execute("DELETE FROM ccaa_decisions_fts")
+            for row in self.connection.execute("SELECT id, topic, verdict_json FROM ccaa_decisions").fetchall():
+                self.connection.execute("INSERT INTO ccaa_decisions_fts VALUES (?, ?, ?)",
+                    (row["id"], normalize_persian(row["topic"]), normalize_persian(self._searchable(json.loads(row["verdict_json"])))))
     @staticmethod
     def _searchable(verdict):
         return " ".join(str(verdict.get(k, "")) for k in ("executive_verdict", "emergent_architecture", "consensus_analysis", "implementation_blueprint", "risk_matrix", "kill_switch_criteria"))
@@ -72,7 +140,7 @@ class Database:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', values)
                 self.connection.execute('DELETE FROM ccaa_decisions_fts WHERE id=?', (row['id'],))
-                self.connection.execute('INSERT INTO ccaa_decisions_fts VALUES (?, ?, ?)', (row['id'], row['topic'], self._searchable(verdict)))
+                self.connection.execute('INSERT INTO ccaa_decisions_fts VALUES (?, ?, ?)', (row['id'], normalize_persian(row['topic']), normalize_persian(self._searchable(verdict))))
     @_locked
     def _import_legacy(self):
         """Import compatible rows from a legacy decisions table, preserving it."""
@@ -92,6 +160,7 @@ class Database:
             values['id'] = legacy_id
             values['topic'] = str(data['topic'] or '')
             self.save(CouncilVerdict(**values))
+    @_write
     @_locked
     def save(self, verdict, opinions=None, turns=None, graph=None, grounding=None):
         encode = lambda value: json.dumps(value, ensure_ascii=False, default=lambda x: asdict(x))
@@ -101,7 +170,7 @@ class Database:
         with self.connection:
             self.connection.execute("INSERT OR REPLACE INTO ccaa_decisions (id, topic, status, created_at, verdict_json, opinions_json, turns_json, graph_json, grounding_json) VALUES (?,?,?,?,?,?,?,?,?)", (verdict.id, verdict.topic, verdict.status, verdict.created_at, encode(v), encode(opinions or []), encode(turns or []), encode(graph or {}), encode(ground)))
             self.connection.execute("DELETE FROM ccaa_decisions_fts WHERE id=?", (verdict.id,))
-            self.connection.execute("INSERT INTO ccaa_decisions_fts VALUES (?,?,?)", (verdict.id, verdict.topic, searchable))
+            self.connection.execute("INSERT INTO ccaa_decisions_fts VALUES (?,?,?)", (verdict.id, normalize_persian(verdict.topic), normalize_persian(searchable)))
     @_locked
     def get(self, decision_id):
         row = self.connection.execute("SELECT * FROM ccaa_decisions WHERE id=?", (decision_id,)).fetchone()
@@ -117,11 +186,12 @@ class Database:
     @_locked
     def search(self, term, limit=100):
         # Quote each token, preventing FTS operators from changing the query.
-        tokens = term.split()
+        tokens = normalize_persian(term).split()
         if not tokens: return []
         query = " AND ".join('"' + token.replace('"', '""') + '"' for token in tokens)
         rows = self.connection.execute("SELECT d.* FROM ccaa_decisions_fts f JOIN ccaa_decisions d ON d.id=f.id WHERE ccaa_decisions_fts MATCH ? ORDER BY rank LIMIT ?", (query, limit))
         return [self._record(row) for row in rows]
+    @_write
     @_locked
     def check_stale(self):
         stale = []
@@ -131,8 +201,10 @@ class Database:
                     self.connection.execute("UPDATE ccaa_decisions SET status='STALE' WHERE id=?", (row['id'],))
                     stale.append(row['id'])
         return stale
-    @_locked
-    def close(self): self.connection.close()
+    def close(self):
+        self._writer.close()
+        with self._lock:
+            self.connection.close()
     def __enter__(self): return self
     def __exit__(self, *args): self.close()
 

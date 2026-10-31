@@ -5,6 +5,8 @@ import sys
 from .config import Settings
 from .engine.orchestrator import CouncilOrchestrator
 from .engine.streaming import DeliberationEventStream
+from .engine.resilience import CircuitBreaker
+from .engine.mcp_client import MCPClient
 from .engine.brier_calibration import BrierEngine
 from .store.database import Database
 from .engine.evomem import EvoMemStore, QuarantineManager
@@ -81,6 +83,9 @@ def _render_record(record, seats=(), audit=False, emit_experiment=False):
 
 
 def _render_output(output, store, settings, audit=False, emit_experiment=False):
+    if "circuit_status" in output: print("Circuit breaker: " + output["circuit_status"])
+    if "mcp_tools" in output:
+        for tool in output["mcp_tools"]: print(f"MCP tool: {tool['name']} ({'mutating' if tool['is_mutating'] else 'read-only'})")
     if "skills" in output:
         print("Skill  Domain  Version  Blast radius")
         for skill in output["skills"]: print(f"{skill['name']}  {skill['domain']}  {skill['version']}  {skill['blast_radius']}")
@@ -117,6 +122,8 @@ def main(argv=None):
     parser.add_argument("--lmsr-shadow", action="store_true", help="Show shadow market probabilities")
     parser.add_argument("--preflight", action="store_true", help="Enforce candidate pre-flight checks")
     parser.add_argument("--fast-path", action="store_true", help="Force a single-pass deliberation")
+    parser.add_argument("--mcp-server", metavar="COMMAND", help="Connect to an MCP server and list its tools")
+    parser.add_argument("--circuit-status", action="store_true", help="Show circuit breaker state")
     parser.add_argument("--brier-status", action="store_true", help="Show seat calibration scores")
     parser.add_argument("--promote-memory", metavar="RECORD_ID", help="Validate and promote a quarantined memory")
     parser.add_argument("--dissent-guard", action="store_true", help="Enforce dissent-guarded stopping")
@@ -142,7 +149,7 @@ def main(argv=None):
     parser.add_argument("--crucible-strict", action="store_true", help="Return failure if any candidate remains rejected")
     args = parser.parse_args(argv)
     if args.workshop and not args.topic: parser.error("--workshop requires a topic")
-    if not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear or args.list_skills or args.brier_status or args.promote_memory): parser.error("provide a topic, --history, --search, or --check-stale")
+    if not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear or args.list_skills or args.brier_status or args.promote_memory or args.circuit_status or args.mcp_server): parser.error("provide a topic, --history, --search, or --check-stale")
     try:
         if args.workshop:
             workshop = AutonomousCrucibleWorkshop(count=args.workshop_count, strict=args.crucible_strict)
@@ -163,7 +170,7 @@ def main(argv=None):
                     print(f"  Cheapest falsification test: {idea.cheapest_falsification_test}")
                     if idea.falsification_reason: print(f"  Rejection reason: {idea.falsification_reason}")
             return 1 if args.crucible_strict and len(survivors) < args.workshop_count else 0
-        if args.list_skills and not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear or args.brier_status or args.promote_memory):
+        if args.list_skills and not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear or args.brier_status or args.promote_memory or args.circuit_status or args.mcp_server):
             skills = builtin_registry().list_skills()
             if args.json:
                 print(json.dumps([{'name': s.name, 'domain': s.domain.value, 'version': s.version, 'blast_radius': s.blast_radius.value} for s in skills], indent=2))
@@ -176,6 +183,10 @@ def main(argv=None):
         memory_path = str(Path(settings.db_path).with_suffix(".evomem.sqlite"))
         with EvoMemStore(memory_path) as memory, Database(settings.db_path) as store:
             output = {}
+            if args.circuit_status: output["circuit_status"] = CircuitBreaker().state
+            if args.mcp_server:
+                with MCPClient(args.mcp_server) as client:
+                    output["mcp_tools"] = [asdict(tool) for tool in client.list_tools()]
             if args.list_skills: output["skills"] = [{"name": s.name, "domain": s.domain.value, "version": s.version, "blast_radius": s.blast_radius.value} for s in builtin_registry().list_skills()]
             if args.brier_status:
                 brier = BrierEngine(settings.db_path)
