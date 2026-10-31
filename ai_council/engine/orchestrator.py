@@ -20,9 +20,14 @@ from pathlib import Path
 import hashlib
 from copy import copy
 from ..skills import Domain, PreFlightHarness, builtin_registry
+from .router import DeliberationRouter, RouteType
+from .crypto_commit import CommitRevealManager
+from .sandbox_runner import IsolatedSandboxRunner as TemplateSandbox
+from .brier_calibration import BrierEngine
+import secrets
 
 class CouncilOrchestrator:
-    def __init__(self, settings=None, seats=None, arbiter=None, store=None, enable_seal=False, enable_evomem=False, memory_provider=None, tenant_id="default", seal_runner=None, skill_registry=None):
+    def __init__(self, settings=None, seats=None, arbiter=None, store=None, enable_seal=False, enable_evomem=False, memory_provider=None, tenant_id="default", seal_runner=None, skill_registry=None, brier_engine=None):
         self.settings = settings or Settings()
         self.seats = list(seats) if seats is not None else [BaseSeat(c, self.settings) for c in self.settings.seats]
         self.arbiter = arbiter or BaseArbiter(self.settings)
@@ -33,6 +38,7 @@ class CouncilOrchestrator:
         self.tenant_id = tenant_id
         self.skill_registry = skill_registry if skill_registry is not None else builtin_registry()
         self.seal_runner = seal_runner
+        self.brier_engine = brier_engine
     @staticmethod
     def _parallel(seats, method, *args):
         results, errors = {}, []
@@ -44,7 +50,7 @@ class CouncilOrchestrator:
                 try: results[i] = future.result()
                 except Exception as exc: errors.append(f"{getattr(getattr(seat, 'config', None), 'role', i)}: {exc}")
         return [results[i] for i in sorted(results)], errors
-    def deliberate(self, topic, files=None, deep=False, early_exit=False, strict_audit=False, code_candidate=None, seal_command=None, skill_domain=None, preflight=False):
+    def deliberate(self, topic, files=None, deep=False, early_exit=False, strict_audit=False, code_candidate=None, seal_command=None, skill_domain=None, preflight=False, fast_path=False):
         if not topic or not topic.strip(): raise ValueError("topic is required")
         correlation_id = str(uuid4())
         domain = self.skill_registry.detect_domain(topic) if skill_domain is None or skill_domain == 'auto' else Domain(skill_domain)
@@ -83,15 +89,30 @@ class CouncilOrchestrator:
             if preflight and preflight_result['status'] == 'FAIL':
                 raise ValueError("preflight failed: " + "; ".join(preflight_result['violations']))
             prompt_grounding.append({"seal_experiment": asdict(seal_result), "preflight": preflight_result})
-        opinions, errors = InfoDelphi().evaluate(seats, topic, prompt_grounding)
+        selected_route = RouteType.FAST_PATH if fast_path else DeliberationRouter().route(topic, {"deep": deep})
+        active_seats = seats[:1] if selected_route == RouteType.FAST_PATH else seats
+        opinions, errors = InfoDelphi().evaluate(active_seats, topic, prompt_grounding)
         if not opinions: raise SeatError("All seats failed: " + "; ".join(errors))
         for opinion in opinions:
             opinion.correlation_id = correlation_id
+        commitments = []
+        commit_manager = CommitRevealManager()
+        for opinion in opinions:
+            payload = asdict(opinion)
+            nonce = secrets.token_hex(32)
+            commitment = commit_manager.generate_commitment(payload, nonce)
+            commitments.append({"seat": opinion.role, "commitment": commitment, "nonce": nonce})
+        # All commitments exist before opinions are shared with the dialectic and arbiter.
+        if not all(commit_manager.verify_reveal(item["commitment"], asdict(opinion), item["nonce"]) for item, opinion in zip(commitments, opinions)):
+            raise ValueError("opinion commitment verification failed")
         audit = DriftAuditor().audit(opinions, grounding)
         if strict_audit and audit.kill_switch_triggered:
             raise ValueError('Evidence deficit: more than 25% of claims are unsupported')
         consensus = ArmorEngine().evaluate_consensus(opinions, audit)
         route = DAGRouter().route(consensus, early_exit, deep)
+        if selected_route == RouteType.FAST_PATH:
+            route.update(early_exit=True, adversarial_challenge=False, run_phase2=False)
+        route['type'] = selected_route.value
         turns, dialectic_errors = self._parallel(seats, 'cross_examine', topic, opinions) if route['run_phase2'] else ([], [])
         errors += dialectic_errors
         claim_graph = ClaimGraph(opinions, correlation_id=correlation_id)
@@ -108,6 +129,10 @@ class CouncilOrchestrator:
             claim_graph.link_dialectical_turn(turn, opinions)
         graph = claim_graph.to_dict()
         experiment = ExperimentSpecGenerator().generate(topic, graph['contested_claims'], correlation_id)
+        if experiment:
+            template_result = TemplateSandbox().run(experiment.test_code_template)
+            if template_result.returncode:
+                raise ValueError("experiment template validation failed: " + template_result.stderr)
         verdict = arbiter.synthesize(topic, opinions, turns, graph, prompt_grounding)
         verdict.correlation_id = correlation_id
         verdict.experiment_spec = asdict(experiment) if experiment else None
@@ -119,12 +144,20 @@ class CouncilOrchestrator:
         verdict.audit_report['active_skills'] = [{'name': s.name, 'version': s.version, 'blast_radius': s.blast_radius.value} for s in skills]
         verdict.audit_report['consensus'] = consensus
         verdict.audit_report['routing'] = route
+        verdict.audit_report['commitments'] = commitments
         verdict.early_exit = route['early_exit']
         if audit.kill_switch_triggered: verdict.status = 'EVIDENCE_DEFICIT_WARNING'
         if errors: verdict.status = 'PARTIAL'
         own_store = self.store is None
         store = self.store or Database(self.settings.db_path)
-        try: store.save(verdict, opinions, turns, graph, grounding)
+        try:
+            store.save(verdict, opinions, turns, graph, grounding)
+            brier = self.brier_engine or BrierEngine(store.path if hasattr(store, "path") else ":memory:")
+            try:
+                for claim in claim_graph.claims:
+                    brier.record_forecast(claim.seat, claim.id, claim.confidence / 10.0, correlation_id)
+            finally:
+                if self.brier_engine is None: brier.close()
         finally:
             if own_store: store.close()
         if self.enable_evomem:

@@ -4,6 +4,7 @@ import json
 import sys
 from .config import Settings
 from .engine.orchestrator import CouncilOrchestrator
+from .engine.brier_calibration import BrierEngine
 from .store.database import Database
 from .engine.evomem import EvoMemStore
 from pathlib import Path
@@ -75,6 +76,11 @@ def _render_output(output, store, settings, audit=False, emit_experiment=False):
     if "skills" in output:
         print("Skill  Domain  Version  Blast radius")
         for skill in output["skills"]: print(f"{skill['name']}  {skill['domain']}  {skill['version']}  {skill['blast_radius']}")
+    if "brier_status" in output:
+        print("Seat  Resolved  Brier score  Weight")
+        for row in output["brier_status"]:
+            score = "—" if row["score"] is None else f"{row['score']:.4f}"
+            print(f"{row['seat']}  {row['resolved']}  {score}  {row['weight']:.4f}")
     if "evomem_status" in output: print("EvoMem: " + ", ".join(f"{k.lower()}: {v}" for k, v in output["evomem_status"].items()))
     if "quarantine_cleared" in output: print(f"Revoked memories purged: {output['quarantine_cleared']}")
     if 'stale' in output:
@@ -98,6 +104,8 @@ def main(argv=None):
     parser.add_argument("--skill-domain", choices=["auto", "engineering", "finance", "security", "architecture", "research"], default="auto")
     parser.add_argument("--list-skills", action="store_true", help="List registered skills")
     parser.add_argument("--preflight", action="store_true", help="Enforce candidate pre-flight checks")
+    parser.add_argument("--fast-path", action="store_true", help="Force a single-pass deliberation")
+    parser.add_argument("--brier-status", action="store_true", help="Show seat calibration scores")
     parser.add_argument("--deep", action="store_true", help="Run dialectical cross-examination")
     parser.add_argument("--early-exit", action="store_true", help="Allow grounded consensus to skip cross-examination")
     parser.add_argument("--emit-experiment", action="store_true", help="Show the generated experiment")
@@ -120,7 +128,7 @@ def main(argv=None):
     parser.add_argument("--crucible-strict", action="store_true", help="Return failure if any candidate remains rejected")
     args = parser.parse_args(argv)
     if args.workshop and not args.topic: parser.error("--workshop requires a topic")
-    if not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear or args.list_skills): parser.error("provide a topic, --history, --search, or --check-stale")
+    if not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear or args.list_skills or args.brier_status): parser.error("provide a topic, --history, --search, or --check-stale")
     try:
         if args.workshop:
             workshop = AutonomousCrucibleWorkshop(count=args.workshop_count, strict=args.crucible_strict)
@@ -141,7 +149,7 @@ def main(argv=None):
                     print(f"  Cheapest falsification test: {idea.cheapest_falsification_test}")
                     if idea.falsification_reason: print(f"  Rejection reason: {idea.falsification_reason}")
             return 1 if args.crucible_strict and len(survivors) < args.workshop_count else 0
-        if args.list_skills and not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear):
+        if args.list_skills and not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear or args.brier_status):
             skills = builtin_registry().list_skills()
             if args.json:
                 print(json.dumps([{'name': s.name, 'domain': s.domain.value, 'version': s.version, 'blast_radius': s.blast_radius.value} for s in skills], indent=2))
@@ -155,6 +163,13 @@ def main(argv=None):
         with EvoMemStore(memory_path) as memory, Database(settings.db_path) as store:
             output = {}
             if args.list_skills: output["skills"] = [{"name": s.name, "domain": s.domain.value, "version": s.version, "blast_radius": s.blast_radius.value} for s in builtin_registry().list_skills()]
+            if args.brier_status:
+                brier = BrierEngine(settings.db_path)
+                try:
+                    output['brier_status'] = brier.status()
+                    present = {row['seat'] for row in output['brier_status']}
+                    output['brier_status'].extend({'seat': seat.role, 'resolved': 0, 'score': None, 'weight': 1.0} for seat in settings.seats if seat.role not in present)
+                finally: brier.close()
             if args.check_stale: output['stale'] = store.check_stale()
             if args.history: output['history'] = store.history()
             if args.search is not None: output['search'] = store.search(args.search)
@@ -162,7 +177,7 @@ def main(argv=None):
             if args.quarantine_clear: output['quarantine_cleared'] = memory.purge_revoked()
             if args.topic:
                 candidate = json.loads(Path(args.seal_candidate).read_text()) if args.seal_candidate else None
-                output['verdict'] = CouncilOrchestrator(settings, store=store, enable_seal=args.seal, enable_evomem=args.evomem, memory_provider=memory, tenant_id=args.tenant_id).deliberate(args.topic, args.file, args.deep, early_exit=args.early_exit, strict_audit=args.strict_audit, code_candidate=candidate, seal_command=shlex.split(args.seal_command) if args.seal_command else None, skill_domain=args.skill_domain, preflight=args.preflight).to_dict()
+                output['verdict'] = CouncilOrchestrator(settings, store=store, enable_seal=args.seal, enable_evomem=args.evomem, memory_provider=memory, tenant_id=args.tenant_id).deliberate(args.topic, args.file, args.deep, early_exit=args.early_exit, strict_audit=args.strict_audit, code_candidate=candidate, seal_command=shlex.split(args.seal_command) if args.seal_command else None, skill_domain=args.skill_domain, preflight=args.preflight, fast_path=args.fast_path).to_dict()
             if args.json: print(json.dumps(output, ensure_ascii=False, indent=2))
             else:
                 _render_output(output, store, settings, audit=args.audit, emit_experiment=args.emit_experiment)
