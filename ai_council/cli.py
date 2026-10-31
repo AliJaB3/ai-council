@@ -7,6 +7,7 @@ from .engine.orchestrator import CouncilOrchestrator
 from .engine.streaming import DeliberationEventStream
 from .engine.resilience import CircuitBreaker
 from .engine.mcp_client import MCPClient
+from .evidence.gateway import EvidenceGateway
 from .engine.brier_calibration import BrierEngine
 from .store.database import Database
 from .engine.evomem import EvoMemStore, QuarantineManager
@@ -121,6 +122,10 @@ def main(argv=None):
     parser.add_argument("--git-fork", metavar="REPO_PATH", help="Test candidate in a temporary git worktree")
     parser.add_argument("--lmsr-shadow", action="store_true", help="Show shadow market probabilities")
     parser.add_argument("--preflight", action="store_true", help="Enforce candidate pre-flight checks")
+    parser.add_argument("--deliberation-mode", choices=("linear", "tree", "mcts"), default="linear")
+    parser.add_argument("--evidence-pump", action="store_true")
+    parser.add_argument("--evidence-tool", help="Read-only MCP search tool for the evidence pump")
+    parser.add_argument("--governance-shadow", action="store_true")
     parser.add_argument("--fast-path", action="store_true", help="Force a single-pass deliberation")
     parser.add_argument("--mcp-server", metavar="COMMAND", help="Connect to an MCP server and list its tools")
     parser.add_argument("--circuit-status", action="store_true", help="Show circuit breaker state")
@@ -208,7 +213,16 @@ def main(argv=None):
                 candidate = json.loads(Path(args.seal_candidate).read_text()) if args.seal_candidate else None
                 stream = DeliberationEventStream()
                 if args.stream_events: stream.subscribe(lambda event: print(json.dumps(asdict(event), ensure_ascii=False), flush=True))
-                output['verdict'] = CouncilOrchestrator(settings, store=store, enable_seal=args.seal, enable_evomem=args.evomem, memory_provider=memory, tenant_id=args.tenant_id, event_stream=stream).deliberate(args.topic, args.file, args.deep, early_exit=args.early_exit, strict_audit=args.strict_audit, code_candidate=candidate, seal_command=shlex.split(args.seal_command) if args.seal_command else None, skill_domain=args.skill_domain, preflight=args.preflight, fast_path=args.fast_path, dissent_guard=args.dissent_guard, git_fork=args.git_fork, lmsr_shadow=args.lmsr_shadow).to_dict()
+                engine = CouncilOrchestrator(settings, store=store, enable_seal=args.seal, enable_evomem=args.evomem, memory_provider=memory, tenant_id=args.tenant_id, event_stream=stream)
+                options = dict(early_exit=args.early_exit, strict_audit=args.strict_audit, code_candidate=candidate, seal_command=shlex.split(args.seal_command) if args.seal_command else None, skill_domain=args.skill_domain, preflight=args.preflight, fast_path=args.fast_path, dissent_guard=args.dissent_guard, git_fork=args.git_fork, lmsr_shadow=args.lmsr_shadow, deliberation_mode=args.deliberation_mode, evidence_pump=args.evidence_pump, governance_shadow=args.governance_shadow)
+                if args.evidence_pump:
+                    if not args.mcp_server or not args.evidence_tool:
+                        raise ValueError("--evidence-pump requires --mcp-server and --evidence-tool")
+                    with MCPClient(args.mcp_server) as client:
+                        options.update(evidence_gateway=EvidenceGateway(client), evidence_tool=args.evidence_tool)
+                        output['verdict'] = engine.deliberate(args.topic, args.file, args.deep, **options).to_dict()
+                else:
+                    output['verdict'] = engine.deliberate(args.topic, args.file, args.deep, **options).to_dict()
             if args.json: print(json.dumps(output, ensure_ascii=False, indent=2))
             else:
                 _render_output(output, store, settings, audit=args.audit, emit_experiment=args.emit_experiment)
