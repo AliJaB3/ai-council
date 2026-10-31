@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import httpx
 import pytest
@@ -83,9 +83,36 @@ def test_seat_http_fallback():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     seat = BaseSeat(SEATS[2], Settings(), client)
     opinion = seat.evaluate('topic')
-    assert calls == ['antigravity/claude-sonnet-4-6', 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free']
-    assert opinion.model_used == 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' and opinion.claims[0].text == 'works'
+    assert calls == ['antigravity/claude-sonnet-4-6', 'zro/glm-5.3-flash']
+    assert opinion.model_used == 'zro/glm-5.3-flash' and opinion.claims[0].text == 'works'
     client.close()
+
+
+@pytest.mark.parametrize('model,has_format,compact', [
+    ('groq/model', False, False),
+    ('cerebras/model', False, False),
+    ('cloudflare-playground/model', True, True),
+    ('unorouter/model', True, True),
+    ('zro/model', True, False),
+])
+def test_provider_request_options(model, has_format, compact):
+    requests = []
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={'choices': [{'message': {'content': '{}'}}]})
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        seat = BaseSeat(replace(SEATS[0], model=model, fallbacks=()), Settings(), client)
+        payload = {'topic': 'a' * 6000}
+        seat._ask('instruction', payload)
+    request = requests[0]
+    assert ('response_format' in request) is has_format
+    content = request['messages'][1]['content']
+    original = json.dumps(payload)
+    if compact:
+        assert content == original[:3800] + '\n\n[...context compacted to fit provider limits...]\n\n' + original[-1400:]
+        assert len(content) < 5500
+    else:
+        assert content == original
 
 
 def test_seat_errors():
