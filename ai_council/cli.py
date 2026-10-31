@@ -9,6 +9,9 @@ from .engine.evomem import EvoMemStore
 from pathlib import Path
 import shlex
 from .skills import builtin_registry
+from .skills.models import Domain
+from .workshop import IdeationWorkshop
+from dataclasses import asdict
 
 def _render_record(record, seats=(), audit=False):
     verdict = record.get("verdict") or {}
@@ -103,9 +106,27 @@ def main(argv=None):
     parser.add_argument("--search", metavar="TERM")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--check-stale", action="store_true")
+    parser.add_argument("--workshop", action="store_true", help="Run an ideation workshop on the topic")
+    parser.add_argument("--workshop-count", type=int, default=3, help="Number of workshop candidates to generate (default: 3)")
     args = parser.parse_args(argv)
+    if args.workshop and not args.topic: parser.error("--workshop requires a topic")
     if not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear or args.list_skills): parser.error("provide a topic, --history, --search, or --check-stale")
     try:
+        if args.workshop:
+            workshop = IdeationWorkshop(count=args.workshop_count)
+            workshop.run_cycle(args.topic, domain=None if args.skill_domain == 'auto' else Domain(args.skill_domain))
+            if args.json:
+                print(json.dumps({'ideas': [asdict(idea) for idea in workshop.candidates]}, ensure_ascii=False, indent=2))
+            else:
+                print(f"\n💡 Ideation workshop: {args.topic}")
+                for idea in workshop.candidates:
+                    print(f"\n{'✅' if idea.status.value == 'VALIDATED' else '❌'} [{idea.status.value}] {idea.title}")
+                    print(f"  Problem: {idea.problem_statement}")
+                    print(f"  Mechanism: {idea.causal_mechanism}")
+                    print(f"  Baseline: {idea.baseline_reference}")
+                    print(f"  Cheapest falsification test: {idea.cheapest_falsification_test}")
+                    if idea.falsification_reason: print(f"  Rejection reason: {idea.falsification_reason}")
+            return 0
         if args.list_skills and not (args.topic or args.history or args.search is not None or args.check_stale or args.evomem_status or args.quarantine_clear):
             skills = builtin_registry().list_skills()
             if args.json:
