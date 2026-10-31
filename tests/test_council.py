@@ -113,7 +113,7 @@ def test_seat_urllib_fallback(monkeypatch):
     monkeypatch.setattr(base, 'httpx', None)
     monkeypatch.setattr(base, 'urlopen', open_request)
     opinion = BaseSeat(SEATS[2], Settings(base_url='http://example.test/v1/', api_key='secret')).evaluate('topic')
-    assert [call['model'] for call in calls] == [SEATS[2].model, *SEATS[2].fallbacks]
+    assert [call['model'] for call in calls] == [SEATS[2].model, SEATS[2].fallbacks[0]]
     assert opinion.model_used == SEATS[2].fallbacks[0]
 
 

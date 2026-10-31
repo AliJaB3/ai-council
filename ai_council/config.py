@@ -16,11 +16,11 @@ class SeatConfig:
 SEATS = (
     SeatConfig("architect", "Architect", "🏛️", "OpenAI", "codex/gpt-6.1-sol", ("codex/gpt-6-astra",)),
     SeatConfig("quant", "Quant", "📊", "Cerebras", "cerebras/gpt-oss-120b", ("groq/openai/gpt-oss-120b",)),
-    SeatConfig("innovator", "Innovator", "💡", "Anthropic", "antigravity/claude-sonnet-4-6", ("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",)),
-    SeatConfig("red_team", "Red Team", "🔴", "DeepSeek", "unorouter/deepseek-r1-distill-qwen-32b:free", ("cloudflare-playground/deepseek-ai/deepseek-r1-distill-qwen-32b",)),
-    SeatConfig("implementer", "Implementer", "🛠️", "Qwen", "unorouter/qwen2.5-coder-32b:free", ("mistral/codestral-latest",)),
+    SeatConfig("innovator", "Innovator", "💡", "Anthropic", "antigravity/claude-sonnet-4-6", ("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", "zro/glm-5.3-flash")),
+    SeatConfig("red_team", "Red Team", "🔴", "DeepSeek", "unorouter/deepseek-r1-distill-qwen-32b:free", ("cloudflare-playground/deepseek-ai/deepseek-r1-distill-qwen-32b", "zro/deepseek-v4.1-flash")),
+    SeatConfig("implementer", "Implementer", "🛠️", "Qwen", "unorouter/qwen2.5-coder-32b:free", ("mistral/codestral-latest", "zro/glm-5.3-flash")),
 )
-ARBITER = SeatConfig("arbiter", "High Bench Arbiter / Chief Justice", "⚖️", "Cerebras", "cerebras/gpt-oss-120b", ("antigravity/gemini-3.8-flash-high", "codex/gpt-6.1-sol"), timeout=120.0)
+ARBITER = SeatConfig("arbiter", "High Bench Arbiter / Chief Justice", "⚖️", "Cerebras", "cerebras/gpt-oss-120b", ("antigravity/gemini-3.8-flash-high", "codex/gpt-6.1-sol", "zro/deepseek-v4.1-flash", "zro/glm-5.3-flash"), timeout=120.0)
 
 @dataclass
 class Settings:
