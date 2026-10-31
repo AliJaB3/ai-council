@@ -9,7 +9,9 @@ from .dag_router import DAGRouter
 from ..config import Settings
 from ..seats import BaseSeat, ArbiterSeat, SeatError
 from ..store.database import Database
-from .claim_graph import ClaimGraph
+from .claim_graph import ClaimGraph, EvidenceNode
+from .experiment_spec import ExperimentSpecGenerator
+from uuid import uuid4
 from .grounding import read_files
 from ..contracts import NullMemoryProvider, MemoryRecord
 from .seal import IsolatedSandboxRunner, RegressionEvaluator
@@ -44,6 +46,7 @@ class CouncilOrchestrator:
         return [results[i] for i in sorted(results)], errors
     def deliberate(self, topic, files=None, deep=False, early_exit=False, strict_audit=False, code_candidate=None, seal_command=None, skill_domain=None, preflight=False):
         if not topic or not topic.strip(): raise ValueError("topic is required")
+        correlation_id = str(uuid4())
         domain = self.skill_registry.detect_domain(topic) if skill_domain is None or skill_domain == 'auto' else Domain(skill_domain)
         skills = self.skill_registry.resolve_jit(domain)
         instructions = "\n".join(f"Skill {s.name} (blast radius: {s.blast_radius.value}): " + "; ".join(s.negative_constraints) for s in skills)
@@ -82,6 +85,8 @@ class CouncilOrchestrator:
             prompt_grounding.append({"seal_experiment": asdict(seal_result), "preflight": preflight_result})
         opinions, errors = InfoDelphi().evaluate(seats, topic, prompt_grounding)
         if not opinions: raise SeatError("All seats failed: " + "; ".join(errors))
+        for opinion in opinions:
+            opinion.correlation_id = correlation_id
         audit = DriftAuditor().audit(opinions, grounding)
         if strict_audit and audit.kill_switch_triggered:
             raise ValueError('Evidence deficit: more than 25% of claims are unsupported')
@@ -89,8 +94,23 @@ class CouncilOrchestrator:
         route = DAGRouter().route(consensus, early_exit, deep)
         turns, dialectic_errors = self._parallel(seats, 'cross_examine', topic, opinions) if route['run_phase2'] else ([], [])
         errors += dialectic_errors
-        graph = ClaimGraph(opinions).to_dict()
+        claim_graph = ClaimGraph(opinions, correlation_id=correlation_id)
+        for item in grounding:
+            evidence = EvidenceNode(str(uuid4()), item['path'], item.get('sha256') or '',
+                                    item.get('content', '')[:500], bool(item.get('exists') and item.get('sha256')))
+            claim_graph.add_evidence(evidence)
+            for opinion in opinions:
+                for index, claim in enumerate(opinion.claims):
+                    if claim.source and (claim.source in item['path'] or item['path'].endswith(claim.source)):
+                        nodes = [node for node in claim_graph.claims if node.seat == opinion.role]
+                        nodes[index].evidence_refs.append(evidence.id)
+        for turn in turns:
+            claim_graph.link_dialectical_turn(turn, opinions)
+        graph = claim_graph.to_dict()
+        experiment = ExperimentSpecGenerator().generate(topic, graph['contested_claims'], correlation_id)
         verdict = arbiter.synthesize(topic, opinions, turns, graph, prompt_grounding)
+        verdict.correlation_id = correlation_id
+        verdict.experiment_spec = asdict(experiment) if experiment else None
         verdict.duration_s = time.monotonic() - start
         verdict.audit_report = asdict(audit)
         if seal_result: verdict.audit_report['seal'] = asdict(seal_result)

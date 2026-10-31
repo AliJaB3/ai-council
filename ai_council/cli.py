@@ -14,7 +14,7 @@ from .workshop import AutonomousCrucibleWorkshop
 from .workshop.models import Domain as WorkshopDomain, IdeaStatus
 from dataclasses import asdict
 
-def _render_record(record, seats=(), audit=False):
+def _render_record(record, seats=(), audit=False, emit_experiment=False):
     verdict = record.get("verdict") or {}
     def number(value):
         try:
@@ -24,6 +24,12 @@ def _render_record(record, seats=(), audit=False):
     print(f"\n⚖️  {verdict.get('topic', 'Council verdict')}")
     print(f"   {verdict.get('status', 'UNKNOWN')} · Confidence {number(verdict.get('confidence_score')):g}/10 · {number(verdict.get('duration_s')):.2f}s")
     print(f"   Decision: {verdict.get('id', '')} · Arbiter: {verdict.get('judge_model') or '—'}")
+    print(f"   🔗 Correlation ID: {verdict.get('correlation_id', '')}")
+    graph = record.get('graph') or {}
+    print(f"   📊 CEO Graph: {len(graph.get('claims', []))} claims, {len(graph.get('evidence', []))} evidence, {len(graph.get('objections', []))} objections ({len(graph.get('contested_claims', []))} contested)")
+    experiment = verdict.get('experiment_spec')
+    if emit_experiment and experiment:
+        print(f"\n╭─ Experiment ─\n│ Hypothesis: {experiment['hypothesis']}\n│ Test template:\n{experiment['test_code_template']}\n╰─")
     report = verdict.get('audit_report') or {}
     if report:
         for skill in report.get('active_skills', []):
@@ -65,7 +71,7 @@ def _render_record(record, seats=(), audit=False):
             print(f"\n## {title}\n\n{verdict[key]}")
 
 
-def _render_output(output, store, settings, audit=False):
+def _render_output(output, store, settings, audit=False, emit_experiment=False):
     if "skills" in output:
         print("Skill  Domain  Version  Blast radius")
         for skill in output["skills"]: print(f"{skill['name']}  {skill['domain']}  {skill['version']}  {skill['blast_radius']}")
@@ -80,10 +86,10 @@ def _render_output(output, store, settings, audit=False):
         if key in output:
             print(f"\n📚  {title} · {len(output[key])} decision(s)")
             for record in output[key]:
-                _render_record(record, audit=audit)
+                _render_record(record, audit=audit, emit_experiment=emit_experiment)
     if 'verdict' in output:
         verdict = output['verdict']
-        _render_record(store.get(verdict['id']) or {'verdict': verdict}, settings.seats, audit=audit)
+        _render_record(store.get(verdict['id']) or {'verdict': verdict}, settings.seats, audit=audit, emit_experiment=emit_experiment)
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ai-council", description="Convene the AI Council")
@@ -94,6 +100,7 @@ def main(argv=None):
     parser.add_argument("--preflight", action="store_true", help="Enforce candidate pre-flight checks")
     parser.add_argument("--deep", action="store_true", help="Run dialectical cross-examination")
     parser.add_argument("--early-exit", action="store_true", help="Allow grounded consensus to skip cross-examination")
+    parser.add_argument("--emit-experiment", action="store_true", help="Show the generated experiment")
     parser.add_argument("--audit", action="store_true", help="Show detailed evidence audit")
     parser.add_argument("--strict-audit", action="store_true", help="Reject evidence deficits")
     parser.add_argument("--seal", action="store_true", help="Enable isolated candidate validation")
@@ -158,7 +165,7 @@ def main(argv=None):
                 output['verdict'] = CouncilOrchestrator(settings, store=store, enable_seal=args.seal, enable_evomem=args.evomem, memory_provider=memory, tenant_id=args.tenant_id).deliberate(args.topic, args.file, args.deep, early_exit=args.early_exit, strict_audit=args.strict_audit, code_candidate=candidate, seal_command=shlex.split(args.seal_command) if args.seal_command else None, skill_domain=args.skill_domain, preflight=args.preflight).to_dict()
             if args.json: print(json.dumps(output, ensure_ascii=False, indent=2))
             else:
-                _render_output(output, store, settings, audit=args.audit)
+                _render_output(output, store, settings, audit=args.audit, emit_experiment=args.emit_experiment)
         return 0
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"ai-council: {exc}", file=sys.stderr)
