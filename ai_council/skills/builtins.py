@@ -8,6 +8,11 @@ AdversarialSecuritySkill = SkillDefinition('AdversarialSecurity', '1.0.0', Domai
 ProbabilisticRiskSkill = SkillDefinition('ProbabilisticRisk', '1.0.0', Domain.FINANCE, 'Probabilistic financial risk analysis.', BlastRadius.READ_ONLY, negative_constraints=['Do not execute trades without 99% CVaR check.', 'Do not ignore drawdown velocity limits.'])
 DialecticConsensusSkill = SkillDefinition('DialecticConsensus', '1.0.0', Domain.ARCHITECTURE, 'Evidence-grounded architectural consensus.', BlastRadius.READ_ONLY, negative_constraints=['Do not approve consensus without cross-peer challenge.', 'Do not accept unsubstantiated assertions without evidence grounding.'])
 
+SystematicRefactoringSkill = SkillDefinition('SystematicRefactoring', '1.0.0', Domain.ENGINEERING, 'Safe AST-based code improvement and dead-code pruning.', BlastRadius.WORKSPACE_WRITE, negative_constraints=['Do not alter observable program behavior without explicit intent.', 'Do not accept refactored code without passing baseline tests.'])
+MemoryDistillationSkill = SkillDefinition('MemoryDistillation', '1.0.0', Domain.RESEARCH, 'Hierarchical memory summarization and token economy.', BlastRadius.READ_ONLY, negative_constraints=['Do not discard grounded evidence citations during distillation.', 'Do not invent ungrounded generalizations.'])
+ChaosResilienceSkill = SkillDefinition('ChaosResilience', '1.0.0', Domain.ENGINEERING, 'Fault injection and network partition resilience.', BlastRadius.ISOLATED_SANDBOX, negative_constraints=['Do not execute destructive chaos tests in production.', 'Do not leak chaos state across test suites.'])
+LiquidityMicrostructureSkill = SkillDefinition('LiquidityMicrostructure', '1.0.0', Domain.FINANCE, 'Order flow imbalance and predatory flow defense.', BlastRadius.READ_ONLY, negative_constraints=['Do not ignore order flow imbalance (OFI) signals.', 'Do not execute market orders during wide bid-ask spread regimes.'])
+
 
 def builtin_registry():
-    return SkillRegistry([SystemsEngineeringSkill, QuantFinanceSkill, AdversarialSecuritySkill, ProbabilisticRiskSkill, DialecticConsensusSkill])
+    return SkillRegistry([SystemsEngineeringSkill, QuantFinanceSkill, AdversarialSecuritySkill, ProbabilisticRiskSkill, DialecticConsensusSkill, SystematicRefactoringSkill, MemoryDistillationSkill, ChaosResilienceSkill, LiquidityMicrostructureSkill])

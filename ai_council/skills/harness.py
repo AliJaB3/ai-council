@@ -2,6 +2,7 @@
 
 These checks are heuristics, not a substitute for isolation or a security review.
 """
+import hashlib
 import math
 import re
 from .models import Domain
@@ -10,8 +11,15 @@ from .models import Domain
 class PreFlightHarness:
     def __init__(self, domain=Domain.GENERAL):
         self.domain = Domain(domain)
+        self._cache = {}
 
     def verify_candidate(self, candidate_code: str, test_runner_fn=None) -> dict:
+        digest = hashlib.sha256(candidate_code.encode('utf-8')).digest()
+        key = (digest, self.domain, id(test_runner_fn))
+        cached = self._cache.get(key)
+        if cached is not None and cached[0] is test_runner_fn:
+            result = cached[1]
+            return {**result, 'violations': result['violations'].copy()}
         violations = []
         patterns = {
             'Hardcoded secret': r'(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|AKIA[A-Z0-9]{12,})',
@@ -44,4 +52,7 @@ class PreFlightHarness:
             except Exception as exc:
                 rate = 1.0
                 violations.append(f'Regression check failed: {exc}')
-        return {'status': 'FAIL' if violations else 'PASS', 'regression_rate': rate, 'violations': violations}
+        result = {'status': 'FAIL' if violations else 'PASS', 'regression_rate': rate, 'violations': violations}
+        if not violations:
+            self._cache[key] = (test_runner_fn, {**result, 'violations': violations.copy()})
+        return result

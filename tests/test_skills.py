@@ -21,8 +21,24 @@ def test_detection_and_builtins():
         assert registry.detect_domain(query) == domain
     assert {skill.name for skill in registry.list_skills()} == {
         'SystemsEngineering', 'QuantFinance', 'AdversarialSecurity',
-        'ProbabilisticRisk', 'DialecticConsensus',
+        'ProbabilisticRisk', 'DialecticConsensus', 'SystematicRefactoring',
+        'MemoryDistillation', 'ChaosResilience', 'LiquidityMicrostructure',
     }
+    assert len(registry.list_skills()) == 9
+    for keyword in ('refactor', 'clean', 'ast', 'dead code', 'chaos', 'resilience', 'fault'):
+        assert registry.detect_domain(keyword) == Domain.ENGINEERING
+    for keyword in ('distill', 'distillation', 'summarize', 'compress memory'):
+        assert registry.detect_domain(keyword) == Domain.RESEARCH
+    for keyword in ('microstructure', 'orderbook', 'ofi', 'order flow', 'spoofing'):
+        assert registry.detect_domain(keyword) == Domain.FINANCE
+    for name, domain, radius, description, constraints in [
+        ('SystematicRefactoring', Domain.ENGINEERING, BlastRadius.WORKSPACE_WRITE, 'Safe AST-based code improvement and dead-code pruning.', ['Do not alter observable program behavior without explicit intent.', 'Do not accept refactored code without passing baseline tests.']),
+        ('MemoryDistillation', Domain.RESEARCH, BlastRadius.READ_ONLY, 'Hierarchical memory summarization and token economy.', ['Do not discard grounded evidence citations during distillation.', 'Do not invent ungrounded generalizations.']),
+        ('ChaosResilience', Domain.ENGINEERING, BlastRadius.ISOLATED_SANDBOX, 'Fault injection and network partition resilience.', ['Do not execute destructive chaos tests in production.', 'Do not leak chaos state across test suites.']),
+        ('LiquidityMicrostructure', Domain.FINANCE, BlastRadius.READ_ONLY, 'Order flow imbalance and predatory flow defense.', ['Do not ignore order flow imbalance (OFI) signals.', 'Do not execute market orders during wide bid-ask spread regimes.']),
+    ]:
+        skill = registry.get(name)
+        assert (skill.version, skill.domain, skill.blast_radius, skill.description, skill.negative_constraints) == ('1.0.0', domain, radius, description, constraints)
     assert registry.resolve_jit(Domain.FINANCE)[0].name == 'QuantFinance'
     for keyword in ('architecture', 'consensus', 'dialectic', 'modular', 'systemic'):
         assert registry.detect_domain(keyword) == Domain.ARCHITECTURE
@@ -83,3 +99,32 @@ def test_orchestrator_loads_skill_in_system_instruction(tmp_path):
     assert 'Do not hold locks during I/O' in seen[0]
     assert result.audit_report['skill_domain'] == 'engineering'
     assert result.audit_report['active_skills'][0]['name'] == 'SystemsEngineering'
+
+
+def test_preflight_memoization():
+    harness = PreFlightHarness()
+    calls = []
+
+    def runner():
+        calls.append(1)
+        return 0
+
+    result = harness.verify_candidate('x = 1', runner)
+    result['violations'].append('caller mutation')
+    assert harness.verify_candidate('x = 1', runner)['violations'] == []
+    assert len(calls) == 1
+    harness.verify_candidate('x = 2', runner)
+    assert len(calls) == 2
+    assert harness.verify_candidate('x = 1', lambda: False)['status'] == 'FAIL'
+    harness.domain = Domain.FINANCE
+    assert harness.verify_candidate('x = 1', runner)['status'] == 'FAIL'
+    assert len(calls) == 3
+
+    failures = []
+    def failing_runner():
+        failures.append(1)
+        return False
+    harness.domain = Domain.GENERAL
+    harness.verify_candidate('x = 1', failing_runner)
+    harness.verify_candidate('x = 1', failing_runner)
+    assert len(failures) == 2

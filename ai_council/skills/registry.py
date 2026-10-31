@@ -22,13 +22,17 @@ class SkillRegistry:
     def detect_domain(text: str) -> Domain:
         keywords = {
             Domain.SECURITY: ('injection', 'vuln', 'vulnerability', 'secret', 'sandbox', 'exploit', 'security'),
-            Domain.FINANCE: ('trading', 'trade', 'orderbook', 'funding', 'finance', 'financial', 'portfolio', 'slippage', 'leverage', 'cvar', 'drawdown', 'liquidity', 'volatility'),
-            Domain.ENGINEERING: ('code', 'ast', 'refactor', 'deadlock', 'software', 'debug', 'engineering', 'bug'),
+            Domain.FINANCE: ('trading', 'trade', 'orderbook', 'funding', 'finance', 'financial', 'portfolio', 'slippage', 'leverage', 'cvar', 'drawdown', 'liquidity', 'volatility', 'microstructure', 'ofi', 'order flow', 'spoofing'),
+            Domain.ENGINEERING: ('code', 'ast', 'refactor', 'deadlock', 'software', 'debug', 'engineering', 'bug', 'clean', 'dead code', 'chaos', 'resilience', 'fault'),
             Domain.ARCHITECTURE: ('architecture', 'architectural', 'design', 'scalability', 'distributed', 'consensus', 'dialectic', 'modular', 'systemic'),
-            Domain.RESEARCH: ('research', 'hypothesis', 'literature', 'study', 'experiment', 'paper'),
+            Domain.RESEARCH: ('research', 'hypothesis', 'literature', 'study', 'experiment', 'paper', 'distill', 'distillation', 'summarize', 'compress memory'),
         }
         words = set(re.findall(r'[a-z0-9_]+', text.lower()))
-        scores = {domain: sum(any(word.startswith(term) for word in words) for term in terms) for domain, terms in keywords.items()}
+        scores = {domain: sum(
+            bool(re.search(r'(?<![a-z0-9_])' + re.escape(term) + r'(?![a-z0-9_])', text.lower()))
+            if ' ' in term else any(word.startswith(term) for word in words)
+            for term in terms
+        ) for domain, terms in keywords.items()}
         winner = max(scores, key=scores.get)
         return winner if scores[winner] else Domain.GENERAL
 
