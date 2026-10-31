@@ -113,6 +113,16 @@ def _render_output(output, store, settings, audit=False, emit_experiment=False):
         _render_record(store.get(verdict['id']) or {'verdict': verdict}, settings.seats, audit=audit, emit_experiment=emit_experiment)
 
 def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "serve":
+        serve_parser = argparse.ArgumentParser(prog="ai-council serve", description="Serve the web dashboard")
+        serve_parser.add_argument("--host", default="0.0.0.0")
+        serve_parser.add_argument("--port", type=int, default=8787)
+        serve_args = serve_parser.parse_args(argv[1:])
+        import uvicorn
+        uvicorn.run("ai_council.web.server:app", host=serve_args.host, port=serve_args.port)
+        return 0
     parser = argparse.ArgumentParser(prog="ai-council", description="Convene the AI Council")
     parser.add_argument("topic", nargs="?")
     parser.add_argument("--file", action="append", default=[], help="Ground deliberation in a file; repeatable")
